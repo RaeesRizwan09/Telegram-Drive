@@ -31,9 +31,11 @@ jobs:
           java-version: '17'
 
       - name: Install Frontend Dependencies
+        working-directory: ./app
         run: npm install
 
       - name: Build Tauri Android APK
+        working-directory: ./app
         run: npx tauri android build
         env:
           NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }} 
@@ -43,4 +45,4 @@ jobs:
         with:
           draft: true
           files: |
-            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+            app/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
