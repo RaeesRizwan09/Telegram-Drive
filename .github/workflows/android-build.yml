@@ -36,9 +36,11 @@ jobs:
 
       - name: Build Tauri Android APK
         working-directory: ./app
-        run: npx tauri android build
+        run: |
+          npm run tauri android init
+          npm run tauri android build
         env:
-          NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }} 
+          NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
