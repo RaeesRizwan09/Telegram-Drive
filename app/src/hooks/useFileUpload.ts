@@ -1,12 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { QueueItem } from '../types';
 import { useFileDrop } from './useFileDrop';
 import type { Store } from '@tauri-apps/plugin-store';
+
+// Tauri FS and Path APIs for local cache management
+import { writeFile } from '@tauri-apps/plugin-fs';
+import { appCacheDir } from '@tauri-apps/api/path';
 
 interface ProgressPayload {
     id: string;
@@ -23,7 +26,6 @@ export function useFileUpload(activeFolderId: number | null, store: Store | null
     const [initialized, setInitialized] = useState(false);
     const cancelledRef = useRef<Set<string>>(new Set());
 
-    // Listen for progress events from Rust
     useEffect(() => {
         let unlisten: UnlistenFn | undefined;
         listen<ProgressPayload>('upload-progress', (event) => {
@@ -73,7 +75,6 @@ export function useFileUpload(activeFolderId: number | null, store: Store | null
         setUploadQueue(q => q.map(i => i.id === item.id ? { ...i, status: 'uploading', progress: 0 } : i));
         try {
             await invoke('cmd_upload_file', { path: item.path, folderId: item.folderId, transferId: item.id });
-            // Check if cancelled during upload
             if (cancelledRef.current.has(item.id)) {
                 cancelledRef.current.delete(item.id);
             } else {
@@ -97,23 +98,57 @@ export function useFileUpload(activeFolderId: number | null, store: Store | null
         }
     };
 
-    const handleManualUpload = async () => {
-        try {
-            const selected = await open({ multiple: true, directory: false });
-            if (selected) {
-                const paths = Array.isArray(selected) ? selected : [selected];
-                const newItems: QueueItem[] = paths.map((path: string) => ({
-                    id: Math.random().toString(36).substr(2, 9),
-                    path,
+    const handleManualUpload = () => {
+        // Use an invisible HTML5 input to bypass Android Storage Access Framework (SAF) URI constraints
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.multiple = false;
+        
+        input.onchange = async (e: any) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+
+            const toastId = toast.loading(`Preparing ${file.name}... (0%)`);
+
+            try {
+                const cacheDir = await appCacheDir();
+                const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+                const filename = `upload_${Date.now()}_${safeName}`;
+                const dest = cacheDir.endsWith('/') ? `${cacheDir}${filename}` : `${cacheDir}/${filename}`;
+
+                // Process file in chunks to prevent Android WebView Out-Of-Memory (OOM) crashes on large files
+                const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks
+                let bytesWritten = 0;
+
+                for (let offset = 0; offset < file.size; offset += CHUNK_SIZE) {
+                    const slice = file.slice(offset, offset + CHUNK_SIZE);
+                    const buffer = await slice.arrayBuffer();
+
+                    await writeFile(dest, new Uint8Array(buffer), { append: true });
+
+                    bytesWritten += buffer.byteLength;
+                    const percent = Math.round((bytesWritten / file.size) * 100);
+                    toast.loading(`Caching to secure storage... (${percent}%)`, { id: toastId });
+                }
+
+                toast.success(`Cached successfully. Queuing upload...`, { id: toastId });
+
+                // Queue the physical cache path for the Rust backend to process
+                const newItem: QueueItem = {
+                    id: Math.random().toString(36).substring(2, 11),
+                    path: dest,
                     folderId: activeFolderId,
                     status: 'pending'
-                }));
-                setUploadQueue(prev => [...prev, ...newItems]);
-                toast.info(`Queued ${paths.length} files for upload`);
+                };
+                
+                setUploadQueue(prev => [...prev, newItem]);
+
+            } catch (err) {
+                toast.error(`File preparation failed: ${err}`, { id: toastId });
             }
-        } catch {
-            toast.error("Failed to open file dialog");
-        }
+        };
+
+        input.click();
     };
 
     const cancelAll = () => {
@@ -138,7 +173,6 @@ export function useFileUpload(activeFolderId: number | null, store: Store | null
                 invoke('cmd_cancel_transfer', { transferId: id }).catch(() => {});
                 return q.map(i => i.id === id ? { ...i, status: 'cancelled' as const } : i);
             }
-            // Remove pending items directly
             if (item?.status === 'pending') {
                 return q.filter(i => i.id !== id);
             }

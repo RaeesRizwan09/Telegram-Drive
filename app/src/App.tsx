@@ -4,7 +4,7 @@ import { AuthWizard } from "./components/AuthWizard";
 import { Dashboard } from "./components/Dashboard";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { UpdateBanner } from "./components/UpdateBanner";
-import { useUpdateCheck } from "./hooks/useUpdateCheck";
+// import { useUpdateCheck } from "./hooks/useUpdateCheck";
 import "./App.css";
 
 import { Toaster } from "sonner";
@@ -17,7 +17,13 @@ const queryClient = new QueryClient();
 function AppContent() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const { theme } = useTheme();
-  const { available, version, downloading, progress, downloadAndInstall, dismissUpdate } = useUpdateCheck();
+  // ❌ Change this:
+  // const { available, version, downloading, progress, downloadAndInstall, dismissUpdate } = useUpdateCheck();
+
+  // ✅ To this dummy object (so the UI doesn't crash):
+  const { available, version, downloading, progress, downloadAndInstall, dismissUpdate } = { 
+    available: false, version: "", downloading: false, progress: 0, downloadAndInstall: () => {}, dismissUpdate: () => {} 
+  };
 
   return (
     <main className="h-screen w-screen text-telegram-text overflow-hidden selection:bg-telegram-primary/30 relative">

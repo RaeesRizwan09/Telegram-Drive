@@ -86,6 +86,24 @@ export function AuthWizard({ onLogin }: { onLogin: () => void }) {
                 if (savedId && savedHash) {
                     setApiId(savedId);
                     setApiHash(savedHash);
+                    
+                    // --- THE AMNESIA FIX: AUTO-LOGIN ---
+                    try {
+                        setLoading(true);
+                        // 1. Tell Rust to wake up the Telegram Client
+                        await invoke("cmd_connect", { apiId: parseInt(savedId, 10) });
+                        // 2. Ask Rust if the session is still authorized
+                        const isConnected = await invoke<boolean>("cmd_check_connection");
+                        
+                        if (isConnected) {
+                            onLogin(); // Session is alive! Skip the wizard!
+                        }
+                    } catch (err) {
+                        console.error("Auto-login failed:", err);
+                        // If it fails, they just stay on the setup screen to log in normally
+                    } finally {
+                        setLoading(false);
+                    }
                 }
             } catch {
                 // config not found, starting fresh

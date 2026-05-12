@@ -1,7 +1,7 @@
 pub mod models;
-
 pub mod commands;
 pub mod bandwidth;
+pub mod server;
 
 use tauri::Manager;
 use tokio::sync::Mutex;
@@ -11,45 +11,46 @@ use commands::TelegramState;
 use commands::streaming::StreamConfig;
 use rand::Rng;
 
-pub mod server;
-
-/// Single source of truth for the Actix streaming server port.
-/// Referenced in lib.rs (server startup) and exposed to the frontend
-/// via cmd_get_stream_info so no component ever hardcodes the port.
-pub const STREAM_PORT: u16 = 14201;
-
-/// Generate a random 32-character hex token for streaming server auth
 fn generate_stream_token() -> String {
     let mut rng = rand::thread_rng();
     let bytes: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-/// Holds the Actix-web server stop handle so we can shut it down
-/// from the RunEvent::Exit handler for graceful Ctrl+C termination.
 pub struct ActixServerHandle(pub Arc<std::sync::Mutex<Option<actix_web::dev::ServerHandle>>>);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::init();
+    // Bind to an ephemeral port to avoid conflicts, falling back to 14201 if unavailable
+    let stream_port = match std::net::TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => listener.local_addr().unwrap().port(),
+        Err(_) => 14201, 
+    };
 
     let stream_token = generate_stream_token();
-
-    // Shared handle for stopping the Actix server during shutdown
-    let server_handle: Arc<std::sync::Mutex<Option<actix_web::dev::ServerHandle>>> =
-        Arc::new(std::sync::Mutex::new(None));
+    let server_handle: Arc<std::sync::Mutex<Option<actix_web::dev::ServerHandle>>> = Arc::new(std::sync::Mutex::new(None));
     let server_handle_for_setup = server_handle.clone();
 
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+    let mut builder = tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Debug)
+                .build(),
+        )
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
-        .setup(move |app| {
+        .plugin(tauri_plugin_fs::init());
+
+    #[cfg(desktop)]
+    {
+        builder = builder
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_process::init())
+            .plugin(tauri_plugin_window_state::Builder::default().build());
+    }
+
+    builder.setup(move |app| {
             app.manage(TelegramState {
                 client: Arc::new(Mutex::new(None)),
                 login_token: Arc::new(Mutex::new(None)),
@@ -60,22 +61,25 @@ pub fn run() {
                 peer_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
                 cancelled_transfers: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
             });
-            app.manage(bandwidth::BandwidthManager::new(app.handle()));
-            app.manage(StreamConfig { token: stream_token.clone(), port: STREAM_PORT });
-            app.manage(ActixServerHandle(server_handle_for_setup.clone()));
             
-            // Start Streaming Server on dedicated thread (Actix needs its own runtime)
+            // Initialize state containers to prevent early access panics on the frontend
+            app.manage(StreamConfig { token: stream_token.clone(), port: stream_port });
+            app.manage(ActixServerHandle(server_handle_for_setup.clone()));
+
+            // Initialize cross-platform bandwidth monitoring
+            app.manage(bandwidth::BandwidthManager::new(&app.handle().clone()));
+            
+            // Spawn the Actix streaming server on a dedicated thread
             let state = Arc::new(app.state::<TelegramState>().inner().clone());
             let token_for_server = stream_token.clone();
             let handle_for_thread = server_handle_for_setup.clone();
+            
             std::thread::spawn(move || {
                 let sys = actix_rt::System::new();
                 sys.block_on(async move {
-                    match server::start_server(state, STREAM_PORT, token_for_server).await {
+                    match server::start_server(state, stream_port, token_for_server).await {
                         Ok(server) => {
-                            // Store the handle so RunEvent::Exit can stop it
                             *handle_for_thread.lock().unwrap() = Some(server.handle());
-                            // Now await the server — blocks until stopped
                             server.await.ok();
                         }
                         Err(e) => log::error!("Streaming server failed: {}", e),
@@ -113,29 +117,20 @@ pub fn run() {
             commands::cmd_auth_qr_poll,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building tauri application");
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Trigger graceful shutdown of background runners and active transfers
+                let shutdown_arc = app_handle.state::<TelegramState>().runner_shutdown.clone();
+                if let Some(tx) = shutdown_arc.lock().ok().and_then(|mut g| g.take()) {
+                    let _ = tx.send(());
+                }
 
-    app.run(|app_handle, event| {
-        if let tauri::RunEvent::Exit = event {
-            log::info!("Application exiting — shutting down background services...");
-
-            // 1. Shutdown the grammers network runner
-            let shutdown_arc = app_handle.state::<TelegramState>().runner_shutdown.clone();
-            let runner_tx = shutdown_arc.lock().ok().and_then(|mut g| g.take());
-            if let Some(tx) = runner_tx {
-                log::info!("Signaling network runner shutdown...");
-                let _ = tx.send(());
+                // Halt the streaming server
+                let server_arc = app_handle.state::<ActixServerHandle>().0.clone();
+                if let Some(handle) = server_arc.lock().ok().and_then(|mut g| g.take()) {
+                    drop(handle.stop(true));
+                }
             }
-
-            // 2. Stop the Actix streaming server (graceful)
-            let server_arc = app_handle.state::<ActixServerHandle>().0.clone();
-            let server_handle = server_arc.lock().ok().and_then(|mut g| g.take());
-            if let Some(handle) = server_handle {
-                log::info!("Stopping Actix streaming server...");
-                // stop() sends the signal synchronously; the returned future
-                // tracks drain completion — we don't need to await it on exit.
-                drop(handle.stop(true));
-            }
-        }
-    });
+        });
 }

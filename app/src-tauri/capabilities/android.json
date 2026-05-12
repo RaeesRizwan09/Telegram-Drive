@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "android-default",
+  "platforms": ["android"],
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "http:default",
+    "fs:allow-read-file",
+    "fs:allow-write-file"
+  ]
+}
