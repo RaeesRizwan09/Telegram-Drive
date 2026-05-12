@@ -5,7 +5,7 @@
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Platform](https://img.shields.io/badge/platform-Android-blue)
 
-![Hero Showcase](screenshots/AuthScreen.png)
+![Hero Showcase]<img src="screenshots/AuthScreen.png" width="250"/>
 
 ## 🌟 What's New in This Version (Mobile Support)
 
@@ -25,14 +25,13 @@ This repository extends the original desktop client with robust mobile capabilit
 ## 📸 Screenshots
 
 ### Mobile View
-| Dashboard (Mobile) | Uploading Large File | Settings / Menu |
+| Item Filtering | Preview | Sidebar |
 | :---: | :---: | :---: |
-| <img src="screenshots/mobile_dashboard.png" width="250"/> | <img src="screenshots/mobile_upload.png" width="250"/> | <img src="screenshots/mobile_menu.png" width="250"/> |
+| <img src="screenshots/ItemFiltering.png" width="250"/> | <img src="screenshots/ImagePreview.png" width="250"/> | <img src="screenshots/FoldersBar.png" width="250"/> |
 
-### Desktop View
-| Grid View | Audio Playback |
-|-----------|----------------|
-| ![Dark Mode](screenshots/DarkModeGrid.png) | ![Audio Playback](screenshots/AudioPlayback.png) |
+| Grid View | Audio Playback | Item Search |
+| :---: | :---: | :---: |
+| <img src="screenshots/DarkModeGrid.png" width="250"/> | <img src="screenshots/AudioPlayback.png" width="250"/> | <img src="screenshots/ItemSearch.png" width="250"/> |
 
 ## 🛠 Tech Stack
 
